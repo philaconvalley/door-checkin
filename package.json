@@ -1,0 +1,7 @@
+{
+  "name": "door-checkin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NFC door check-in webhook for PhilaCon Valley events. Posts a Discord notification and returns a landing page.",
+  "license": "UNLICENSED"
+}
