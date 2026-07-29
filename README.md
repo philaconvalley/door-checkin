@@ -10,12 +10,36 @@ outside a locked door, stops wondering whether anything happened.
 
 ## Live URL
 
+The tag must carry the door key, or nothing rings:
+
 ```
-https://door-checkin-eight.vercel.app
+https://door-checkin-eight.vercel.app/?k=<DOOR_KEY>
 ```
 
-Both `/` and `/api/checkin` serve the doorbell — `vercel.json` rewrites the root
-to the function so the NFC tag can hold the shorter, bare-domain URL.
+`vercel.json` rewrites `/` to the function, so the tag can hold the short
+bare-domain form rather than `/api/checkin`.
+
+### Why the key exists
+
+A URL that anything on the internet can fetch was ringing a bell in a real
+building. On 2026-07-28 a single deploy produced three door alerts, and the
+Vercel logs showed none of them came from a phone:
+
+| User agent | Origin | What it is |
+|---|---|---|
+| `undici` | sfo1 | Node's HTTP client — Vercel's post-deploy check |
+| `Mozilla/5.0 (X11; Linux x86_64)` | sfo1 | headless Chrome — Vercel's deployment-thumbnail renderer |
+
+Two of them landed 210ms apart, which no human produces tapping a sticker.
+
+The underlying fault was a **`GET` with a side effect**. Ringing a doorbell
+changes the world, so it cannot sit behind a URL that deploy bots, crawlers,
+link unfurlers and security scanners all pull unprompted. The key means only a
+real tap rings; a bare `GET /` renders a page and sends nothing.
+
+The key is not a secret in any strong sense — it is printed on a sticker at a
+door. It is a spam filter, not authentication. Rotate it by changing `DOOR_KEY`
+and rewriting the tag.
 
 ## How the loop works
 
@@ -87,10 +111,15 @@ tap logs the correct id to the Vercel function logs.
 
 | Variable | Required | Purpose |
 |---|---|---|
+| `DOOR_KEY` | yes | Only taps carrying `?k=` this ring the bell |
 | `DISCORD_WEBHOOK_URL` | yes | Posts the door alert |
 | `DISCORD_BOT_TOKEN` | for the ack loop | Reads who reacted |
 | `DISCORD_CHANNEL_ID` | for the ack loop | Pins `/api/status` to one channel |
 | `DISCORD_ALERT_MENTION` | optional | e.g. `<@&ROLE_ID>` to ping a role |
+
+With `DOOR_KEY` unset the doorbell rings for nobody and the page says so plainly.
+That is deliberate: a doorbell that fails loudly on the screen of the person
+standing outside beats one that quietly rings for every crawler on the internet.
 
 Never commit any of these. Vercel bakes env vars in at build time, so
 **redeploy after adding or changing one.**
@@ -119,17 +148,21 @@ invisible from the guest's side of the door.
 ## Writing the NFC tag
 
 Use NFC Tools (iOS/Android): Write → Add a record → **URL/URI** (not "Text" — a
-text record will not auto-open a browser) → enter the live URL above → hold the
-tag to the phone's NFC antenna.
+text record will not auto-open a browser) → enter the live URL **including
+`?k=<DOOR_KEY>`** → hold the tag to the phone's NFC antenna.
+
+Without the query string the tag opens a page that rings nothing, which looks
+identical to a working tag until someone is waiting outside in the cold.
 
 Test the tap before locking. Locking is permanent, but a public unlocked tag can
 be silently rewritten by anyone with a phone, so lock it once the tap works.
 
 ## Known gaps
 
-- **No dedupe.** Every tap posts a new message. An anxious guest tapping three
-  times produces three alerts. This is expected behaviour rather than abuse, and
-  the page tries to make re-tapping feel unnecessary, but the fix is server-side.
+- **No dedupe.** Every keyed tap posts a new message. An anxious guest tapping
+  three times produces three alerts. This is expected behaviour rather than
+  abuse, and the page tries to make re-tapping feel unnecessary, but the fix is
+  server-side. The key stops *automated* duplicates, not human ones.
 - **First reactor wins.** If two leaders react, the page names whoever Discord
   returns first.
 - **No un-claim.** Once someone reacts, the page says they are coming. If they
