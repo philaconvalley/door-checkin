@@ -1,4 +1,11 @@
+// What the message asks for.
 const CLAIM_EMOJI = '✅';
+
+// What actually counts. At a glance ✅ ☑️ and ✔️ are the same tick, and a leader
+// who picks the wrong one walks downstairs believing they answered while the
+// guest keeps waiting. 👍 is included because it unambiguously means "on it"
+// in reply to a door alert.
+const CLAIM_EMOJIS = ['✅', '☑️', '✔️', '👍'];
 
 // What the guest is told, per state. The page must never claim somebody was
 // notified when they weren't — the original bug here was a page that
@@ -382,3 +389,4 @@ module.exports.authorize = authorize;
 
 module.exports.alertDiscord = alertDiscord;
 module.exports.CLAIM_EMOJI = CLAIM_EMOJI;
+module.exports.CLAIM_EMOJIS = CLAIM_EMOJIS;

@@ -63,6 +63,10 @@ and rewriting the tag.
      |  "Diego is coming down." |                        |                 |
 ```
 
+The message asks for `✅`, but **`☑️`, `✔️` and `👍` all count as a claim.** At a
+glance those ticks are indistinguishable, and a leader who picks the wrong one
+would walk downstairs believing they had answered while the guest kept waiting.
+
 **There is no database.** The Discord message and its reactions *are* the state —
 who was alerted, whether anyone claimed it, and which person. The app only ever
 asks Discord what it already knows, which is why this repo still has no
