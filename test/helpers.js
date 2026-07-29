@@ -4,11 +4,17 @@
 // Every env var the three handlers read. Cleared between tests so a test can
 // never inherit configuration from the one before it.
 const ENV_KEYS = [
+  'DOOR_KEY',
   'DISCORD_WEBHOOK_URL',
   'DISCORD_ALERT_MENTION',
   'DISCORD_CHANNEL_ID',
   'DISCORD_BOT_TOKEN',
 ];
+
+// The tag's key, and the tapped URL that carries it. Anything without this is
+// treated as a crawler, so almost every ringing test needs both.
+const DOOR_KEY = 'test-door-key';
+const TAP = `/?k=${DOOR_KEY}`;
 
 function clearEnv() {
   for (const key of ENV_KEYS) delete process.env[key];
@@ -116,4 +122,6 @@ module.exports = {
   stubFetch,
   discordReply,
   captureConsole,
+  DOOR_KEY,
+  TAP,
 };

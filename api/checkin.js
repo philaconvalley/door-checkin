@@ -1,15 +1,53 @@
+// What the message asks for.
 const CLAIM_EMOJI = '✅';
 
-// The tag is at a locked door. If we could not reach Discord, the page must not
-// claim that anyone was told — it says so instead, and offers the knock.
-function page({ alerted, channelId, messageId }) {
+// What actually counts. At a glance ✅ ☑️ and ✔️ are the same tick, and a leader
+// who picks the wrong one walks downstairs believing they answered while the
+// guest keeps waiting. 👍 is included because it unambiguously means "on it"
+// in reply to a door alert.
+const CLAIM_EMOJIS = ['✅', '☑️', '✔️', '👍'];
+
+// What the guest is told, per state. The page must never claim somebody was
+// notified when they weren't — the original bug here was a page that
+// misreported the situation of a person standing outside a locked door.
+const COPY = {
+  waiting: {
+    title: "We've told them you're here",
+    head: "We've told them.",
+    sub: 'A message just went to the PhilaCon Valley team. Someone will come down and let you in.',
+    meta: 'Just now',
+  },
+  failed: {
+    title: "We couldn't reach anyone",
+    head: "We couldn't reach anyone.",
+    sub: 'The notification did not go through. Knock, or tap the tag once more.',
+    meta: 'Not delivered',
+  },
+  // Reached by anything that loads the bare URL without the tag's key: Vercel's
+  // own deploy bots, crawlers, link unfurlers, or a person who typed the domain.
+  idle: {
+    title: 'PhilaCon Valley — front door',
+    head: 'This is the door.',
+    sub: "Tap the tag on the door with your phone and we'll let the team know you're here.",
+    meta: 'Nothing sent',
+  },
+  unconfigured: {
+    title: 'The doorbell is not set up',
+    head: "The doorbell isn't set up.",
+    sub: 'This tap could not be sent to anyone. Knock, or call someone inside.',
+    meta: 'Not configured',
+  },
+};
+
+function page({ state, channelId, messageId, doorKey }) {
+  const copy = COPY[state];
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0b0c">
-<title>${alerted ? "We've told them you're here" : "We couldn't reach anyone"}</title>
+<title>${copy.title}</title>
 <style>
   :root {
     --void:  #0b0b0c;
@@ -46,7 +84,12 @@ function page({ alerted, channelId, messageId }) {
     animation: breathe 2.6s ease-in-out infinite;
   }
   [data-state="claimed"] .pulse { background: var(--green); animation: none; }
-  [data-state="failed"]  .pulse { background: #c25b4a; animation: none; }
+  [data-state="failed"] .pulse,
+  [data-state="unconfigured"] .pulse { background: #c25b4a; animation: none; }
+  [data-state="idle"] .pulse {
+    background: color-mix(in srgb, var(--ivory) 30%, transparent);
+    animation: none;
+  }
   @keyframes breathe {
     0%, 100% { opacity: .28; transform: scale(.82); }
     50%      { opacity: 1;   transform: scale(1); }
@@ -139,17 +182,15 @@ function page({ alerted, channelId, messageId }) {
   }
 </style>
 </head>
-<body data-state="${alerted ? 'waiting' : 'failed'}" data-elapsed="fresh">
+<body data-state="${state}" data-elapsed="fresh">
 
   <div class="pulse" aria-hidden="true"></div>
   <div class="rule" aria-hidden="true"></div>
 
   <div class="stack">
-    <h1 id="head">${alerted ? "We've told them." : "We couldn't reach anyone."}</h1>
-    <p class="sub" id="sub" role="status" aria-live="polite">${alerted
-      ? 'A message just went to the PhilaCon Valley team. Someone will come down and let you in.'
-      : 'The notification did not go through. Knock, or tap the tag once more.'}</p>
-    <p class="meta" id="meta">${alerted ? 'Just now' : 'Not delivered'}</p>
+    <h1 id="head">${copy.head}</h1>
+    <p class="sub" id="sub" role="status" aria-live="polite">${copy.sub}</p>
+    <p class="meta" id="meta">${copy.meta}</p>
 
     <div class="later">
       <button id="again" type="button">Ring again</button>
@@ -164,6 +205,9 @@ function page({ alerted, channelId, messageId }) {
 <script>
   const CHANNEL = ${JSON.stringify(channelId || '')};
   const MESSAGE = ${JSON.stringify(messageId || '')};
+  const STATE   = ${JSON.stringify(state)};
+  // Already in this page's own URL, so putting it here exposes nothing new.
+  const KEY     = ${JSON.stringify(doorKey || '')};
   const body = document.body;
   const head = document.getElementById('head');
   const sub  = document.getElementById('sub');
@@ -220,18 +264,20 @@ function page({ alerted, channelId, messageId }) {
     } catch (_) { /* venue wifi — try again next tick */ }
   }
 
-  if (MESSAGE) {
+  if (STATE === 'waiting' && MESSAGE) {
     timer = setInterval(function () { tick(); poll(); }, 3000);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
-  } else {
+  } else if (STATE === 'failed') {
+    // Nothing was sent, so offer the retry immediately rather than after 2min.
     body.dataset.elapsed = 'stalled';
   }
+  // idle and unconfigured deliberately offer nothing: there is no ring to retry.
 
   again.addEventListener('click', async function () {
     again.disabled = true;
     again.textContent = 'Sending…';
     try {
-      const r = await fetch('/api/again', { method: 'POST', cache: 'no-store' });
+      const r = await fetch('/api/again?k=' + encodeURIComponent(KEY), { method: 'POST', cache: 'no-store' });
       again.textContent = r.ok ? 'Sent again' : 'Try once more';
     } catch (_) {
       again.textContent = 'Try once more';
@@ -293,22 +339,55 @@ function doorMessage() {
   ].join('\n');
 }
 
-module.exports = async (req, res) => {
-  const message = await alertDiscord(doorMessage());
+// Only the NFC tag carries the key, so only a real tap rings the bell. A bare
+// GET of this URL rings nothing — which matters because plenty of things fetch
+// it without being asked: Vercel's own post-deploy checks (`undici`) and its
+// deployment-thumbnail renderer (headless Chrome), link unfurlers, crawlers.
+// Ringing a doorbell in a real building is a side effect, and side effects do
+// not belong on a URL that anything on the internet can pull.
+function authorize(req) {
+  const doorKey = process.env.DOOR_KEY;
+  if (!doorKey) return 'unconfigured';
 
-  if (message && !process.env.DISCORD_CHANNEL_ID) {
-    console.log('Set DISCORD_CHANNEL_ID to', message.channel_id, 'to enable the acknowledgment loop.');
+  const url = new URL(req.url || '/', 'http://localhost');
+  return url.searchParams.get('k') === doorKey ? 'authorized' : 'idle';
+}
+
+module.exports = async (req, res) => {
+  const verdict = authorize(req);
+
+  if (verdict === 'unconfigured') {
+    console.error('DOOR_KEY is not set — the doorbell cannot ring for anyone.');
   }
+
+  let message = null;
+  if (verdict === 'authorized') {
+    message = await alertDiscord(doorMessage());
+
+    if (message && !process.env.DISCORD_CHANNEL_ID) {
+      console.log('Set DISCORD_CHANNEL_ID to', message.channel_id, 'to enable the acknowledgment loop.');
+    }
+  }
+
+  const state = verdict === 'authorized'
+    ? (message ? 'waiting' : 'failed')
+    : verdict;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  // Nothing here should ever be indexed or unfurled.
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   res.status(200).send(page({
-    alerted: Boolean(message),
+    state,
     channelId: message && message.channel_id,
     messageId: message && message.id,
+    doorKey: verdict === 'authorized' ? process.env.DOOR_KEY : '',
   }));
 };
+
+module.exports.authorize = authorize;
 
 module.exports.alertDiscord = alertDiscord;
 module.exports.doorMessage = doorMessage;
 module.exports.CLAIM_EMOJI = CLAIM_EMOJI;
+module.exports.CLAIM_EMOJIS = CLAIM_EMOJIS;

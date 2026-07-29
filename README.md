@@ -10,12 +10,36 @@ outside a locked door, stops wondering whether anything happened.
 
 ## Live URL
 
+The tag must carry the door key, or nothing rings:
+
 ```
-https://door-checkin-eight.vercel.app
+https://door-checkin-eight.vercel.app/?k=<DOOR_KEY>
 ```
 
-Both `/` and `/api/checkin` serve the doorbell — `vercel.json` rewrites the root
-to the function so the NFC tag can hold the shorter, bare-domain URL.
+`vercel.json` rewrites `/` to the function, so the tag can hold the short
+bare-domain form rather than `/api/checkin`.
+
+### Why the key exists
+
+A URL that anything on the internet can fetch was ringing a bell in a real
+building. On 2026-07-28 a single deploy produced three door alerts, and the
+Vercel logs showed none of them came from a phone:
+
+| User agent | Origin | What it is |
+|---|---|---|
+| `undici` | sfo1 | Node's HTTP client — Vercel's post-deploy check |
+| `Mozilla/5.0 (X11; Linux x86_64)` | sfo1 | headless Chrome — Vercel's deployment-thumbnail renderer |
+
+Two of them landed 210ms apart, which no human produces tapping a sticker.
+
+The underlying fault was a **`GET` with a side effect**. Ringing a doorbell
+changes the world, so it cannot sit behind a URL that deploy bots, crawlers,
+link unfurlers and security scanners all pull unprompted. The key means only a
+real tap rings; a bare `GET /` renders a page and sends nothing.
+
+The key is not a secret in any strong sense — it is printed on a sticker at a
+door. It is a spam filter, not authentication. Rotate it by changing `DOOR_KEY`
+and rewriting the tag.
 
 ## How the loop works
 
@@ -39,10 +63,15 @@ to the function so the NFC tag can hold the shorter, bare-domain URL.
      |  "Diego is coming down." |                        |                 |
 ```
 
-Step 2 is a reaction with the claim emoji — the single character defined as
-`CLAIM_EMOJI` in `api/checkin.js`, named in the alert text so leaders know which
-one counts. `/api/status` reads the reactor list for that one emoji and returns
-the first non-bot name it finds.
+Step 2 is a reaction. The alert asks for `CLAIM_EMOJI` (`✅`) so leaders know what
+to use, but every emoji in `CLAIM_EMOJIS` counts — **`☑️`, `✔️` and `👍` all claim
+the door.** At a glance those ticks are indistinguishable, and a leader who picked
+the wrong one would walk downstairs believing they had answered while the guest
+kept waiting.
+
+`/api/status` reads the message once to see which emoji are present, then reads
+the reactor list only for the one that matched, and returns the first non-bot name
+it finds. Polling an unclaimed door therefore still costs a single Discord call.
 
 **There is no database.** The Discord message and its reactions *are* the state —
 who was alerted, whether anyone claimed it, and which person. The app only ever
@@ -161,10 +190,16 @@ the correct id to the Vercel function logs.
 
 | Variable | Required | Purpose |
 |---|---|---|
+| `DOOR_KEY` | yes | Only a tap carrying `?k=` this rings the bell. Without it nothing rings for anyone and the page says so |
 | `DISCORD_WEBHOOK_URL` | yes | Posts the door alert. Without it every tap renders the "couldn't reach anyone" page |
 | `DISCORD_BOT_TOKEN` | for the claim loop | Reads who reacted. Without it `/api/status` answers `not-configured` and the page waits forever |
 | `DISCORD_CHANNEL_ID` | strongly recommended | Pins `/api/status` to one channel — see step 3 |
 | `DISCORD_ALERT_MENTION` | optional | e.g. `<@&ROLE_ID>` to ping a role. Role and everyone mentions are only allowed when this is set |
+
+An unset `DOOR_KEY` deliberately fails closed rather than open. The alternative —
+falling back to ringing for every request — is what this repo already shipped
+once, and it rang for Vercel's own deploy bots. A doorbell that fails visibly on
+the screen of the person outside beats one that quietly works for crawlers.
 
 Never commit any of these. A deployment captures the environment it was built
 with, so **redeploy after adding or changing one.**
@@ -194,17 +229,21 @@ invisible from the guest's side of the door.
 ## Writing the NFC tag
 
 Use NFC Tools (iOS/Android): Write → Add a record → **URL/URI** (not "Text" — a
-text record will not auto-open a browser) → enter the live URL above → hold the
-tag to the phone's NFC antenna.
+text record will not auto-open a browser) → enter the live URL **including
+`?k=<DOOR_KEY>`** → hold the tag to the phone's NFC antenna.
+
+Without the query string the tag opens a page that rings nothing, which looks
+identical to a working tag until someone is waiting outside in the cold.
 
 Test the tap before locking. Locking is permanent, but a public unlocked tag can
 be silently rewritten by anyone with a phone, so lock it once the tap works.
 
 ## Known gaps
 
-- **No dedupe.** Every tap posts a new message. An anxious guest tapping three
-  times produces three alerts. This is expected behaviour rather than abuse, and
-  the page tries to make re-tapping feel unnecessary, but the fix is server-side.
+- **No dedupe.** Every keyed tap posts a new message. An anxious guest tapping
+  three times produces three alerts. This is expected behaviour rather than
+  abuse, and the page tries to make re-tapping feel unnecessary, but the fix is
+  server-side. The key stops *automated* duplicates, not human ones.
 - **First reactor wins.** If two leaders react, the page names whoever Discord
   returns first.
 - **No un-claim.** Once someone reacts, the page says they are coming. If they

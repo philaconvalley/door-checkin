@@ -2,7 +2,7 @@ const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const status = require('../api/status.js');
-const { CLAIM_EMOJI } = require('../api/checkin.js');
+const { CLAIM_EMOJI, CLAIM_EMOJIS } = require('../api/checkin.js');
 const {
   clearEnv,
   setEnv,
@@ -22,8 +22,21 @@ function request({ c = '', m = '' } = {}) {
   return { method: 'GET', url: `/api/status?c=${encodeURIComponent(c)}&m=${encodeURIComponent(m)}` };
 }
 
-async function call(req, reactors = []) {
-  const net = stubFetch(() => discordReply({ body: reactors }));
+// Two Discord calls now. The message read reports which emoji are present; the
+// per-emoji read names the reactors, and only runs once something matched. The
+// stub routes on the URL so an unclaimed door still makes exactly one call.
+async function call(req, reactors = [], emoji = CLAIM_EMOJI) {
+  const net = stubFetch((sent) =>
+    sent.url.includes('/reactions/')
+      ? discordReply({ body: reactors })
+      : discordReply({
+          body: {
+            reactions: reactors.length
+              ? [{ count: reactors.length, emoji: { name: emoji } }]
+              : [],
+          },
+        }),
+  );
   const res = makeRes();
   try {
     await status(req, res);
@@ -139,18 +152,45 @@ test('rejects a malformed channel id when there is nothing pinned to fall back t
   assert.equal(net.count, 0);
 });
 
-test('asks Discord for the claim emoji reactions with the bot credential', async () => {
+test('reads the message with the bot credential, and stops there when nobody reacted', async () => {
   setEnv({ DISCORD_BOT_TOKEN: TOKEN, DISCORD_CHANNEL_ID: PINNED_CHANNEL });
   const { net } = await call(request({ m: MESSAGE_ID }));
 
+  assert.equal(net.count, 1, 'an unclaimed door must not cost a second call');
   const sent = net.calls[0];
   assert.equal(
     sent.url,
-    'https://discord.com/api/v10/channels/' +
-      `${PINNED_CHANNEL}/messages/${MESSAGE_ID}` +
-      `/reactions/${encodeURIComponent(CLAIM_EMOJI)}?limit=10`,
+    `https://discord.com/api/v10/channels/${PINNED_CHANNEL}/messages/${MESSAGE_ID}`,
   );
   assert.equal(sent.headers.Authorization, `Bot ${TOKEN}`);
+});
+
+test('asks for the reactor list only for the emoji that actually matched', async () => {
+  setEnv({ DISCORD_BOT_TOKEN: TOKEN, DISCORD_CHANNEL_ID: PINNED_CHANNEL });
+  const { net } = await call(request({ m: MESSAGE_ID }), [{ username: 'nina' }], '👍');
+
+  assert.equal(net.count, 2);
+  assert.equal(
+    net.calls[1].url,
+    `https://discord.com/api/v10/channels/${PINNED_CHANNEL}/messages/${MESSAGE_ID}` +
+      `/reactions/${encodeURIComponent('👍')}?limit=10`,
+  );
+  assert.equal(net.calls[1].headers.Authorization, `Bot ${TOKEN}`);
+});
+
+test('every emoji in CLAIM_EMOJIS claims the door, not just the one the alert asks for', async () => {
+  for (const emoji of CLAIM_EMOJIS) {
+    setEnv({ DISCORD_BOT_TOKEN: TOKEN, DISCORD_CHANNEL_ID: PINNED_CHANNEL });
+    const { res } = await call(request({ m: MESSAGE_ID }), [{ username: 'nina', global_name: 'Nina R' }], emoji);
+    assert.deepEqual(res.body, { claimed: true, by: 'Nina R' }, `${emoji} should claim`);
+  }
+});
+
+test('an unrelated reaction is not a claim', async () => {
+  setEnv({ DISCORD_BOT_TOKEN: TOKEN, DISCORD_CHANNEL_ID: PINNED_CHANNEL });
+  const { res } = await call(request({ m: MESSAGE_ID }), [{ username: 'nina' }], '🎉');
+
+  assert.deepEqual(res.body, { claimed: false });
 });
 
 test('claims on the first human reactor, skipping the bot that seeded the emoji', async () => {
