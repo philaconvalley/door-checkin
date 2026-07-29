@@ -2,6 +2,12 @@
   "name": "door-checkin",
   "version": "1.0.0",
   "private": true,
-  "description": "NFC door check-in webhook for PhilaCon Valley events. Posts a Discord notification and returns a landing page.",
-  "license": "UNLICENSED"
+  "description": "NFC door check-in for PhilaCon Valley events: posts a door alert to Discord and serves a page that polls until a team member claims it.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
