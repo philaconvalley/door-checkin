@@ -210,6 +210,38 @@ with, so **redeploy after adding or changing one.**
 vercel deploy --prod
 ```
 
+`main` is protected: changes go through a pull request, and both CI jobs must pass
+before merge. Admins can bypass on purpose — if the door breaks mid-event, nobody
+should be fighting their own tooling to ship a fix.
+
+## Monitoring
+
+`.github/workflows/ci.yml` proves the handlers are correct. **It cannot prove they
+reached production, or that production is configured.** Every real failure this
+project has had lived in that gap: unguarded code live on the door, and a bot that
+could not read the channel it was told to watch.
+
+`.github/workflows/smoke.yml` covers it, running after every push to `main`, daily
+at 13:00 UTC, and on demand. It checks that a bare `GET /` returns the idle page and
+**sends no alert** — a regression there means the door is ringing for crawlers again.
+
+**Nothing in it ever rings the doorbell.** Every request omits the door key on
+purpose. A synthetic that performed a real tap would summon somebody to a real door
+on a cron schedule.
+
+### The canary
+
+Set the `CANARY_MESSAGE_ID` repository variable to the id of a permanent pinned
+message in the door channel. The smoke check reads that message through
+`/api/status`, which proves the bot token is valid *and* the bot can still see the
+channel — without posting anything.
+
+Until it is set, that check is skipped and the workflow says so. This is the failure
+mode worth catching: a rotated token or a bot removed from the private channel is
+completely invisible from the guest's side. The alert still posts, so the team is
+still notified — but the guest's page waits forever for a claim that can never
+arrive.
+
 ## Verifying
 
 The page renders whether or not Discord was reached, so loading it proves nothing

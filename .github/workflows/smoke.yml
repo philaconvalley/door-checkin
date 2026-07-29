@@ -1,0 +1,114 @@
+# Verifies the deployed door, not the code. CI already proves the handlers are
+# correct; this proves the correct handlers actually reached production with the
+# configuration they need. The gap between those two is where this project has
+# actually broken: unguarded code live on the door, and a bot that could not read
+# the channel it was told to watch.
+#
+# Nothing here ever rings the doorbell. Every request deliberately omits the door
+# key, and the checks assert that no alert was sent. A synthetic that performed a
+# real tap would page the whole leadership role on a schedule.
+name: Production smoke
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 13:00 UTC — a red check waiting in the morning, well before doors close.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    env:
+      DOOR_URL: ${{ vars.DOOR_URL || 'https://door-checkin-eight.vercel.app' }}
+
+    steps:
+      - name: The guard holds, and an unkeyed request rings nothing
+        run: |
+          # On a push, Vercel is still building, so give the deploy a chance to
+          # land rather than failing on a race we created ourselves.
+          for attempt in $(seq 1 10); do
+            body="$(curl -sS --max-time 15 "$DOOR_URL/")"
+            if grep -q '<body data-state="idle"' <<<"$body"; then
+              echo "Guard is live (attempt $attempt)."
+              break
+            fi
+            if [ "$attempt" = "10" ]; then
+              echo "::error::A bare GET / did not return the idle page after 10 attempts."
+              echo "This means the door is ringing for crawlers and deploy bots again,"
+              echo "or DOOR_KEY is missing from the production environment."
+              echo "--- what the door actually returned ---"
+              grep -o '<body data-state="[a-z]*"' <<<"$body" || echo "(no state attribute found)"
+              grep -o '<h1[^>]*>[^<]*</h1>' <<<"$body" || true
+              exit 1
+            fi
+            echo "Not idle yet (attempt $attempt); waiting for the deploy."
+            sleep 20
+          done
+
+          # The load-bearing assertion. An embedded message id means the request
+          # posted a real alert to Discord — the exact incident this guards.
+          if ! grep -q 'const MESSAGE = ""' <<<"$body"; then
+            echo "::error::An unkeyed request produced a Discord message id."
+            echo "Someone was just summoned to the door by this health check."
+            exit 1
+          fi
+          echo "No alert was sent."
+
+      - name: A wrong key is refused the same as no key
+        run: |
+          body="$(curl -sS --max-time 15 "$DOOR_URL/?k=definitely-not-the-door-key")"
+          grep -q '<body data-state="idle"' <<<"$body" || {
+            echo "::error::A wrong door key was not rejected."; exit 1; }
+          grep -q 'const MESSAGE = ""' <<<"$body" || {
+            echo "::error::A wrong door key still rang the doorbell."; exit 1; }
+
+      - name: The door page stays out of search results and link previews
+        run: |
+          header="$(curl -sSI --max-time 15 "$DOOR_URL/" | tr -d '\r' | grep -i '^x-robots-tag:' || true)"
+          [ -n "$header" ] || { echo "::error::X-Robots-Tag header is missing."; exit 1; }
+          echo "$header"
+
+      # Proves the bot token is valid and the bot can still read the door channel,
+      # by reading a message that already exists. Nothing is posted. Set the
+      # CANARY_MESSAGE_ID repository variable to a permanent pinned message in the
+      # door channel to switch this on.
+      - name: The bot can still read the door channel
+        if: ${{ vars.CANARY_MESSAGE_ID != '' }}
+        run: |
+          answer="$(curl -sS --max-time 15 "$DOOR_URL/api/status?m=${{ vars.CANARY_MESSAGE_ID }}")"
+          echo "$answer"
+
+          case "$answer" in
+            *not-configured*)
+              echo "::error::DISCORD_BOT_TOKEN is missing from production."
+              echo "The alert still posts, but no claim can ever come back."
+              exit 1 ;;
+            *discord-error*)
+              echo "::error::Discord refused the read. Almost always one of:"
+              echo "  - the bot was removed from the private door channel"
+              echo "  - the bot token was reset and production has the old one"
+              echo "  - the canary message was deleted"
+              exit 1 ;;
+            *bad-id*)
+              echo "::error::CANARY_MESSAGE_ID is not a valid message id."
+              exit 1 ;;
+            *unreachable*)
+              echo "::error::Could not reach Discord at all."
+              exit 1 ;;
+            *claimed*)
+              echo "Bot read the channel successfully." ;;
+            *)
+              echo "::error::Unrecognised answer from /api/status."
+              exit 1 ;;
+          esac
+
+      - name: Say what was skipped
+        if: ${{ vars.CANARY_MESSAGE_ID == '' }}
+        run: |
+          echo "::warning::Skipped the Discord read check — CANARY_MESSAGE_ID is not set."
+          echo "Until it is, nothing here notices if the bot loses access to the door"
+          echo "channel or the token is rotated. That failure is invisible to guests:"
+          echo "the alert still posts, but the page waits forever."
