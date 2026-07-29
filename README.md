@@ -53,7 +53,7 @@ and rewriting the tag.
      |<-- waiting page ---------|                        |                 |
      |    (message id inside)   |                        |                 |
      |                          |                        |                 |
- 2   |                          |                        |<-- react ✅ ----|
+ 2   |                          |                        |<--- react ------|
      |                          |                        |                 |
  3   |-- GET /api/status ------>|                        |                 |
      |   (every 3s)             |-- read reactions ----->|                 |
@@ -63,9 +63,15 @@ and rewriting the tag.
      |  "Diego is coming down." |                        |                 |
 ```
 
-The message asks for `✅`, but **`☑️`, `✔️` and `👍` all count as a claim.** At a
-glance those ticks are indistinguishable, and a leader who picks the wrong one
-would walk downstairs believing they had answered while the guest kept waiting.
+Step 2 is a reaction. The alert asks for `CLAIM_EMOJI` (`✅`) so leaders know what
+to use, but every emoji in `CLAIM_EMOJIS` counts — **`☑️`, `✔️` and `👍` all claim
+the door.** At a glance those ticks are indistinguishable, and a leader who picked
+the wrong one would walk downstairs believing they had answered while the guest
+kept waiting.
+
+`/api/status` reads the message once to see which emoji are present, then reads
+the reactor list only for the one that matched, and returns the first non-bot name
+it finds. Polling an unclaimed door therefore still costs a single Discord call.
 
 **There is no database.** The Discord message and its reactions *are* the state —
 who was alerted, whether anyone claimed it, and which person. The app only ever
@@ -80,6 +86,73 @@ Two mechanics the design rests on, both easy to lose:
 - Incoming webhooks are **write-only**. Reading reactions needs a real bot token,
   which is a separate setup from the webhook (below).
 
+## Endpoints
+
+| Route | Method | What it does |
+|---|---|---|
+| `/` | GET | Rewritten to `/api/checkin` by `vercel.json` |
+| `/api/checkin` | GET | Posts the alert, returns the waiting page with the message id embedded |
+| `/api/status?c={channel}&m={message}` | GET | Reports whether anyone reacted, and who |
+| `/api/again` | POST | Posts a second, louder alert |
+
+Vercel serverless functions, CommonJS (`module.exports`), no build step and no
+dependencies.
+
+## What the waiting page does while the guest waits
+
+The page is the whole product — it is what a person is looking at while standing
+outside a locked door. It polls `/api/status` every three seconds and moves
+through timed states, all defined at the top of the inline script:
+
+| Constant | At | What changes |
+|---|---|---|
+| `SETTLED` | 45s | Copy softens to "Still waiting. Someone usually comes down within a couple of minutes." |
+| `STALLED` | 120s | Copy admits nobody has picked it up, and a **Ring again** button appears |
+| `GIVE_UP` | 600s | Polling stops; the elapsed-time label keeps counting |
+
+**Ring again** posts to `/api/again`, which sends a deliberately different, louder
+message rather than repeating the first one — the first alert was missed, so
+repeating it in the same voice would most likely be missed the same way. The
+button disables itself for twenty seconds after each press.
+
+When a claim lands, polling stops, the headline becomes "{name} is coming down",
+and the phone gives a short vibration if it supports it.
+
+**Polling is skipped whenever `document.hidden` is true.** A guest puts the phone
+back in a pocket while waiting; without this, a locked screen would keep spending
+serverless invocations for a page nobody is reading. A `visibilitychange`
+listener polls once immediately when the page comes back to the foreground, so
+nothing is lost by pocketing it.
+
+### When the webhook fails
+
+If the Discord post does not go through, there is no message id, so there is
+nothing to poll and nobody has been told. The page says exactly that — "We
+couldn't reach anyone", "The notification did not go through. Knock, or tap the
+tag once more" — and shows the Ring again button straight away instead of hiding
+it behind the two-minute wait. It does not claim a delivery that did not happen.
+Reporting the guest's situation back to them incorrectly is the original fault
+this rework was meant to fix.
+
+### Accessibility and legibility decisions
+
+The reading conditions are specific: outdoors, at night, often cold, on a phone
+held one-handed. The choices follow from that.
+
+- **The pulse is a slow breath, not a spinner.** A spinner reads as "stuck". This
+  reads as someone being with you. It stops and turns green the moment the claim
+  lands; on the failure page it is red and still from the start.
+- **`prefers-reduced-motion: reduce` disables every animation**, including the
+  pulse, the rule that draws itself, and the entry transitions.
+- **Contrast is not spent on mood.** The small uppercase metadata text sits at 52%
+  ivory over the near-black background, which clears 4.5:1. The comment in the
+  source says why: this is not a place to trade legibility for atmosphere.
+- The status line carries `role="status"` and `aria-live="polite"`, so a screen
+  reader announces the change from waiting to claimed without the guest hunting
+  for it.
+- Buttons are at least 48px tall and have a visible `:focus-visible` ring; the
+  layout respects `env(safe-area-inset-bottom)` and `viewport-fit=cover`.
+
 ## Setup
 
 ### 1. Discord webhook (posts the alert)
@@ -89,8 +162,8 @@ Set it as `DISCORD_WEBHOOK_URL`.
 
 ### 2. Discord bot (reads the reaction)
 
-The webhook alone cannot read anything back, so the acknowledgment loop needs a
-bot as well.
+The webhook alone cannot read anything back, so the claim loop needs a bot as
+well.
 
 1. https://discord.com/developers/applications → **New Application**
 2. **Bot** tab → **Reset Token** → copy it. Set as `DISCORD_BOT_TOKEN`.
@@ -106,27 +179,30 @@ Discord → User Settings → Advanced → **Developer Mode** on. Right-click th
 channel → **Copy Channel ID**. Set as `DISCORD_CHANNEL_ID`.
 
 This one is a security control, not a convenience. `/api/status` takes the
-channel id from the guest's browser, so without this pin the endpoint would read
-reactions from *any* channel the bot can see, for anyone who guesses a message
-id. With it set, the client-supplied value is ignored. If you skip it, the first
-tap logs the correct id to the Vercel function logs.
+channel and message ids from the guest's browser, so they are attacker-controlled
+by the time they arrive. Both are checked against a Discord snowflake pattern,
+but without this pin the endpoint would still read reactions from *any* channel
+the bot can see, for anyone who guesses a message id. With it set, the
+client-supplied channel is ignored entirely. If you skip it, the first tap logs
+the correct id to the Vercel function logs.
 
 ### Environment variables
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DOOR_KEY` | yes | Only taps carrying `?k=` this ring the bell |
-| `DISCORD_WEBHOOK_URL` | yes | Posts the door alert |
-| `DISCORD_BOT_TOKEN` | for the ack loop | Reads who reacted |
-| `DISCORD_CHANNEL_ID` | for the ack loop | Pins `/api/status` to one channel |
-| `DISCORD_ALERT_MENTION` | optional | e.g. `<@&ROLE_ID>` to ping a role |
+| `DOOR_KEY` | yes | Only a tap carrying `?k=` this rings the bell. Without it nothing rings for anyone and the page says so |
+| `DISCORD_WEBHOOK_URL` | yes | Posts the door alert. Without it every tap renders the "couldn't reach anyone" page |
+| `DISCORD_BOT_TOKEN` | for the claim loop | Reads who reacted. Without it `/api/status` answers `not-configured` and the page waits forever |
+| `DISCORD_CHANNEL_ID` | strongly recommended | Pins `/api/status` to one channel — see step 3 |
+| `DISCORD_ALERT_MENTION` | optional | e.g. `<@&ROLE_ID>` to ping a role. Role and everyone mentions are only allowed when this is set |
 
-With `DOOR_KEY` unset the doorbell rings for nobody and the page says so plainly.
-That is deliberate: a doorbell that fails loudly on the screen of the person
-standing outside beats one that quietly rings for every crawler on the internet.
+An unset `DOOR_KEY` deliberately fails closed rather than open. The alternative —
+falling back to ringing for every request — is what this repo already shipped
+once, and it rang for Vercel's own deploy bots. A doorbell that fails visibly on
+the screen of the person outside beats one that quietly works for crawlers.
 
-Never commit any of these. Vercel bakes env vars in at build time, so
-**redeploy after adding or changing one.**
+Never commit any of these. A deployment captures the environment it was built
+with, so **redeploy after adding or changing one.**
 
 ## Deploy
 
@@ -136,15 +212,16 @@ vercel deploy --prod
 
 ## Verifying
 
-The page renders whether or not Discord was reached, so loading it proves
-nothing on its own. Check in this order:
+The page renders whether or not Discord was reached, so loading it proves nothing
+on its own. Check in this order:
 
 1. **The alert** — a message appears in the door channel. If not,
    `DISCORD_WEBHOOK_URL` is missing from the production environment.
-2. **The ack** — react ✅ to that message; the waiting page should switch to
-   "<name> is coming down" within about three seconds. If it does not, check the
-   function logs for `Discord reactions read failed` — that is almost always the
-   bot lacking View Channel or Read Message History on that channel.
+2. **The claim** — react to that message with the claim emoji; the waiting page
+   should switch to "{name} is coming down" within about three seconds. If it
+   does not, check the function logs for `Discord reactions read failed` — that is
+   almost always the bot lacking View Channel or Read Message History on that
+   channel.
 
 Failures are deliberately loud in the logs, because every one of them is
 invisible from the guest's side of the door.
@@ -171,3 +248,6 @@ be silently rewritten by anyone with a phone, so lock it once the tap works.
   returns first.
 - **No un-claim.** Once someone reacts, the page says they are coming. If they
   then get pulled away, the guest is not told.
+- **Wait state lives in the tab.** The elapsed timer starts at page load, so a
+  reload both rings the door again and restarts the countdown to the Ring again
+  button.

@@ -388,5 +388,6 @@ module.exports = async (req, res) => {
 module.exports.authorize = authorize;
 
 module.exports.alertDiscord = alertDiscord;
+module.exports.doorMessage = doorMessage;
 module.exports.CLAIM_EMOJI = CLAIM_EMOJI;
 module.exports.CLAIM_EMOJIS = CLAIM_EMOJIS;
