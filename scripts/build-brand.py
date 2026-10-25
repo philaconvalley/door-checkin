@@ -61,6 +61,9 @@ def subset_woff2(path, css_range):
     sub.subset(font)
     out = io.BytesIO()
     font.flavor = 'woff2'
+    # Keep the source's modified date, so a rebuild from the same files gives
+    # the same bytes and a clean diff.
+    font.recalcTimestamp = False
     font.save(out)
     return out.getvalue()
 
@@ -86,6 +89,10 @@ def main():
         "// design system (Brand Identity Guidebook Edition 1.2), inlined so the door",
         '// page needs no second request and sends nothing to a font host. Use the',
         '// mark as is: never redraw or recolor it.',
+        '//',
+        '// The fonts are subsets of Baloo 2, Nunito and JetBrains Mono, each under the',
+        '// SIL Open Font License 1.1, not this repository\'s MIT license. See',
+        '// FONT-LICENSES.txt.',
         '',
         f"module.exports.PIGEON_MARK = '{data_uri('image/webp', mark)}';",
         '',

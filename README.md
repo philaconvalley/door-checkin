@@ -113,6 +113,8 @@ guest's IP address. The fonts are subset to the characters the page can show,
 about 29KB together. `api/_brand.js` is generated: rebuild it with
 `scripts/build-brand.py` (usage is in the script) from the design system's
 files. Vercel does not deploy a file whose name starts with `_` as a function.
+The fonts are under the SIL Open Font License, not this repository's MIT
+license; their notices are in `FONT-LICENSES.txt`.
 
 The headline and the line under it share one `aria-live` region, so a screen
 reader announces "Diego is coming down. Hang tight by the door." as one
