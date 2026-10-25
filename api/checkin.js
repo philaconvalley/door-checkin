@@ -119,14 +119,10 @@ function page({ state, channelId, messageId, doorKey }) {
   body[data-state="unconfigured"] { --ground: var(--brand-coral); }
   body[data-state="idle"] { --ground: var(--white); }
 
-  .mark {
-    width: 56px; height: 56px;
-    border-radius: 50%;
-    border: var(--stroke-outline) solid var(--brand-dark);
-    background: var(--white);
-    box-shadow: 3px 3px 0 var(--brand-dark);
-    overflow: hidden;
-  }
+  /* The mark as drawn: no frame, no crop. Its antenna reaches into the
+     image's corner, so a circle crop cut it off (seen on an iPhone). The
+     mark carries its own ink outline, so it holds up on every ground. */
+  .mark { width: 64px; height: 64px; }
   .mark img { display: block; width: 100%; height: 100%; }
 
   .stack { width: 100%; max-width: 34rem; }
@@ -272,9 +268,18 @@ function page({ state, channelId, messageId, doorKey }) {
   }
   /* Pink would vanish into the coral ground; use the white sticker there. */
   [data-state="failed"] .btn { background: var(--white); }
-  .btn:active { --lift: 2px; transform: translate(2px, 2px); transition-duration: var(--duration-press); }
-  .btn:disabled { cursor: default; }
-  .btn:disabled:active { --lift: 4px; transform: none; }
+  /* .is-pressed is set from pointer events (see the script): iOS does not
+     apply :active reliably to a finger, so a tap showed no press at all on
+     an iPhone. :active stays for the mouse and the keyboard. */
+  .btn:active,
+  .btn.is-pressed { --lift: 2px; transform: translate(2px, 2px); transition-duration: var(--duration-press); }
+  /* During the 20s cooldown ("Sent again") the button stays pressed flat
+     into its shadow, so it reads as already pushed. It used to look exactly
+     like the live button: on an iPhone, presses on it did nothing visible,
+     which reads as a broken page. Same outer edge as at rest; no greys. */
+  .btn:disabled,
+  .btn:disabled:active,
+  .btn:disabled.is-pressed { cursor: default; --lift: 0px; transform: translate(4px, 4px); }
   @media (hover: hover) and (pointer: fine) {
     .btn:not(:disabled):hover { --lift: 6px; transform: translate(-2px, -2px); }
   }
@@ -317,14 +322,14 @@ function page({ state, channelId, messageId, doorKey }) {
     .dot, .rule, .status, h1, .sub { animation: none !important; }
     .rule { transform: none; }
     .later, .explore, .sticker, #head.arrive, #sub.arrive { animation: fade 200ms ease both !important; }
-    .btn, .btn:active { transform: none; }
+    .btn, .btn:active, .btn.is-pressed, .btn:disabled { transform: none; }
   }
   @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 </style>
 </head>
 <body data-state="${state}" data-elapsed="fresh">
 
-  <div class="mark"><img src="${PIGEON_MARK}" alt="PhilaCon Valley" width="56" height="56"></div>
+  <div class="mark"><img src="${PIGEON_MARK}" alt="PhilaCon Valley" width="64" height="64"></div>
 
   <div class="stack">
     <p class="status"><span class="dot" aria-hidden="true"></span><span id="meta">${copy.meta}</span></p>
@@ -363,9 +368,14 @@ function page({ state, channelId, messageId, doorKey }) {
   const again = document.getElementById('again');
   const theme = document.getElementById('theme');
 
-  // iOS Safari skips :active on a tap unless the page listens for touches.
-  // Without this, the button gives no press feedback on an iPhone.
-  document.addEventListener('touchstart', function () {}, { passive: true });
+  // Press feedback starts the moment a finger lands, not on release, and it
+  // does not depend on how a browser handles :active for touch.
+  function press() { if (!again.disabled) again.classList.add('is-pressed'); }
+  function release() { again.classList.remove('is-pressed'); }
+  again.addEventListener('pointerdown', press);
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (type) {
+    again.addEventListener(type, release);
+  });
 
   let started = Date.now();
   let lastRing = started;

@@ -53,6 +53,7 @@ function element(text = '') {
     classList: {
       names: new Set(),
       add(name) { this.names.add(name); },
+      remove(name) { this.names.delete(name); },
       contains(name) { return this.names.has(name); },
     },
     listeners: {},
@@ -266,4 +267,23 @@ test('the page watches the first alert and only the latest repeat', async () => 
   await door.tick();
 
   assert.deepEqual(door.polled().slice(before), [FIRST.m, third]);
+});
+
+test('the button shows its press the moment a finger lands, and lets go on release', async () => {
+  const door = boot('waiting', { messageId: FIRST.m });
+  const btn = door.nodes.again;
+  const fire = (type) => btn.listeners[type].forEach((fn) => fn());
+
+  fire('pointerdown');
+  assert.ok(btn.classList.contains('is-pressed'), 'pressed on finger-down, not on release');
+  fire('pointerup');
+  assert.ok(!btn.classList.contains('is-pressed'));
+
+  fire('pointerdown');
+  fire('pointercancel');   // iOS cancels when the touch turns into a scroll
+  assert.ok(!btn.classList.contains('is-pressed'), 'a scroll must not leave it stuck down');
+
+  btn.disabled = true;     // "Sent again" for 20 seconds
+  fire('pointerdown');
+  assert.ok(!btn.classList.contains('is-pressed'), 'a disabled button does not press');
 });
