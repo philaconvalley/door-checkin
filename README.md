@@ -276,6 +276,15 @@ completely invisible from the guest's side. The alert still posts, so the team i
 still notified — but the guest's page waits forever for a claim that can never
 arrive.
 
+### Page views
+
+Vercel Web Analytics counts page views. The page loads `/_vercel/insights/script.js`
+with a plain script tag, not the `@vercel/analytics` package, so the repo keeps no
+dependencies. The script is served from this domain and sets no cookies. A
+`beforeSend` hook removes `k` from each URL, so the door key never appears in the
+dashboard. Turn on Web Analytics in the project's Analytics tab, or the script
+returns 404 and counts nothing.
+
 ## Verifying
 
 The page renders whether or not Discord was reached, so loading it proves nothing

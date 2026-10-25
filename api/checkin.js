@@ -61,6 +61,20 @@ function page({ state, channelId, messageId, doorKey }) {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="${GROUND[state]}" id="theme">
 <title>${copy.title}</title>
+<!-- Vercel Web Analytics, without @vercel/analytics: there is no build step
+     here to bundle it. The script is first-party (same domain, no cookies).
+     beforeSend removes the door key, so the tag's URL never reaches the
+     dashboard. Both tags carry attributes on purpose: test/page.test.js finds
+     the page's own script as the one script tag with no attributes. -->
+<script id="analytics">
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+  window.va('beforeSend', function (event) {
+    const url = new URL(event.url);
+    url.searchParams.delete('k');
+    return Object.assign({}, event, { url: url.toString() });
+  });
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
 <style>
   /* The brand faces, inlined and subset (scripts/build-brand.py). They arrive
      with the page, so the text never changes shape after it first paints,
