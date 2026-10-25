@@ -93,10 +93,30 @@ Two mechanics the design rests on, both easy to lose:
 | `/` | GET | Rewritten to `/api/checkin` by `vercel.json` |
 | `/api/checkin` | GET | Posts the alert, returns the waiting page with the message id embedded |
 | `/api/status?c={channel}&m={message}` | GET | Reports whether anyone reacted, and who |
-| `/api/again` | POST | Posts a second, louder alert |
+| `/api/again` | POST | Posts a second, louder alert and returns its message id |
 
 Vercel serverless functions, CommonJS (`module.exports`), no build step and no
 dependencies.
+
+## How the page looks
+
+The page follows the PhilaCon Valley design system (Brand Identity Guidebook
+Edition 1.2): one ground color per state (yellow waiting, pink claimed, coral
+failed, white idle), Baloo 2 headings, Nunito body, JetBrains Mono for the time
+row, ink outlines and hard shadows. The claimer's name sits in a sticker.
+
+The pigeon mark and the three fonts are **inlined into the page** from
+`api/_brand.js`. Every guest at the door is a first-time visitor, so a browser
+cache never helps; separate files would cost the same bytes plus round trips
+over venue wifi, and a font host such as Google Fonts would receive each
+guest's IP address. The fonts are subset to the characters the page can show,
+about 29KB together. `api/_brand.js` is generated: rebuild it with
+`scripts/build-brand.py` (usage is in the script) from the design system's
+files. Vercel does not deploy a file whose name starts with `_` as a function.
+
+The headline and the line under it share one `aria-live` region, so a screen
+reader announces "Diego is coming down. Hang tight by the door." as one
+sentence.
 
 ## What the waiting page does while the guest waits
 
@@ -108,12 +128,22 @@ through timed states, all defined at the top of the inline script:
 |---|---|---|
 | `SETTLED` | 45s | Copy softens to "Still waiting. Someone usually comes down within a couple of minutes." |
 | `STALLED` | 120s | Copy admits nobody has picked it up, and a **Ring again** button appears |
-| `GIVE_UP` | 600s | Polling stops; the elapsed-time label keeps counting |
+| `GIVE_UP` | 600s after the last ring | Polling stops; the elapsed-time label keeps counting |
 
 **Ring again** posts to `/api/again`, which sends a deliberately different, louder
 message rather than repeating the first one — the first alert was missed, so
 repeating it in the same voice would most likely be missed the same way. The
 button disables itself for twenty seconds after each press.
+
+`/api/again` returns the new message's id, and **the page watches the first
+message and the latest repeat**. A leader who reacts to "Still at the door"
+reaches the guest's screen the same way a reaction to the first alert does.
+Only two, because every watched message costs Discord reads on every poll, and
+a rate-limited bot looks to the guest like nobody answering.
+
+A poll is skipped while the previous one is still in flight, and each status
+request gives up after eight seconds. On slow venue wifi the requests cannot
+pile up, and a hung request cannot stop polling for good.
 
 When a claim lands, polling stops, the headline becomes "{name} is coming down",
 and the phone gives a short vibration if it supports it.
@@ -131,6 +161,8 @@ nothing to poll and nobody has been told. The page says exactly that — "We
 couldn't reach anyone", "The notification did not go through. Knock, or tap the
 tag once more" — and shows the Ring again button straight away instead of hiding
 it behind the two-minute wait. It does not claim a delivery that did not happen.
+If that Ring again goes through, the page becomes the normal waiting page and
+starts polling.
 Reporting the guest's situation back to them incorrectly is the original fault
 this rework was meant to fix.
 

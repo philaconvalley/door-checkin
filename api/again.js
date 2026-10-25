@@ -29,5 +29,8 @@ module.exports = async (req, res) => {
     ].join('\n'),
   );
 
-  return res.status(message ? 200 : 502).json({ ok: Boolean(message) });
+  // The page watches this message as well as the first one. Without its id, a
+  // leader who reacted to the repeat was never shown on the guest's screen.
+  if (!message) return res.status(502).json({ ok: false });
+  return res.status(200).json({ ok: true, id: message.id, channel_id: message.channel_id });
 };
