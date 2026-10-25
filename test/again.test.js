@@ -58,7 +58,7 @@ test('sets no-store JSON headers even on the refused path', async () => {
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('answers 200 once the second alert is posted', async () => {
+test('answers 200 with the new message id once the second alert is posted', async () => {
   setEnv({ DOOR_KEY, DISCORD_WEBHOOK_URL: WEBHOOK });
   net = stubFetch(() => discordReply({ body: SENT_MESSAGE }));
 
@@ -66,7 +66,12 @@ test('answers 200 once the second alert is posted', async () => {
   await again({ method: 'POST', url: RING }, res);
 
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body, { ok: true });
+  // The page needs the id to watch the repeat for a claim, not just the first.
+  assert.deepEqual(res.body, {
+    ok: true,
+    id: SENT_MESSAGE.id,
+    channel_id: SENT_MESSAGE.channel_id,
+  });
   assert.equal(net.count, 1);
 });
 
